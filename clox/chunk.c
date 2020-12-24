@@ -42,8 +42,8 @@ void WriteConstant(Chunk* chunk, Value value, int line)
 	{
 		WriteChunk(chunk, OP_CONSTANT_LONG, line);
 		WriteChunk(chunk, index & 0x000000FF, line);
-		WriteChunk(chunk, index & 0x0000FF00, line);
-		WriteChunk(chunk, index & 0x00FF0000, line);
+		WriteChunk(chunk, (index & 0x0000FF00) >> 8, line);
+		WriteChunk(chunk, (index & 0x00FF0000) >> 16, line);
 	}
 	else
 	{
