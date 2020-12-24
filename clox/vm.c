@@ -1,8 +1,10 @@
 #include "vm.h"
 
 #include <assert.h>
+#include <stdio.h>
 
 #include "common.h"
+#include "compiler.h"
 #include "debug.h"
 
 VM vm;
@@ -20,6 +22,12 @@ void InitVM()
 void FreeVM()
 {
 	FreeValueArray(&vm.stack);
+}
+
+InterpretResult Interpret(const char* source)
+{
+	Compile(source);
+	return INTERPRET_OK;
 }
 
 static InterpretResult Run()
@@ -111,12 +119,12 @@ static InterpretResult Run()
 #undef BINARY_OP
 }
 
-InterpretResult Interpret(Chunk* chunk)
-{
-	vm.chunk = chunk;
-	vm.ip = chunk->code;
-	return Run();
-}
+//InterpretResult Interpret(Chunk* chunk)
+//{
+//	vm.chunk = chunk;
+//	vm.ip = chunk->code;
+//	return Run();
+//}
 
 void Push(Value value)
 {

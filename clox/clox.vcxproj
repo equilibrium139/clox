@@ -140,19 +140,23 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="chunk.c" />
+    <ClCompile Include="compiler.c" />
     <ClCompile Include="debug.c" />
     <ClCompile Include="lines.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="memory.c" />
+    <ClCompile Include="scanner.c" />
     <ClCompile Include="value.c" />
     <ClCompile Include="vm.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
     <ClInclude Include="chunk.h" />
+    <ClInclude Include="compiler.h" />
     <ClInclude Include="debug.h" />
     <ClInclude Include="lines.h" />
     <ClInclude Include="memory.h" />
+    <ClInclude Include="scanner.h" />
     <ClInclude Include="value.h" />
     <ClInclude Include="vm.h" />
   </ItemGroup>
