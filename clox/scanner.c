@@ -22,7 +22,7 @@ void InitScanner(const char* source)
 
 static bool IsAtEnd()
 {
-	return *scanner.current != '\0';
+	return *scanner.current == '\0';
 }
 
 static Token MakeToken(TokenType type)

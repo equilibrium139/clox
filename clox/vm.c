@@ -24,12 +24,6 @@ void FreeVM()
 	FreeValueArray(&vm.stack);
 }
 
-InterpretResult Interpret(const char* source)
-{
-	Compile(source);
-	return INTERPRET_OK;
-}
-
 static InterpretResult Run()
 {
 #define READ_BYTE() (*vm.ip++)
@@ -117,6 +111,25 @@ static InterpretResult Run()
 #undef READ_CONSTANT_LONG_INDEX
 #undef READ_CONSTANT_LONG
 #undef BINARY_OP
+}
+
+InterpretResult Interpret(const char* source)
+{
+	Chunk chunk;
+	InitChunk(&chunk);
+
+	if (!Compile(source, &chunk))
+	{
+		FreeChunk(&chunk);
+		return INTERPRET_COMPILE_ERROR;
+	}
+
+	vm.chunk = &chunk;
+	vm.ip = chunk.code;
+
+	InterpretResult result = Run();
+	FreeChunk(&chunk);
+	return result;
 }
 
 //InterpretResult Interpret(Chunk* chunk)

@@ -35,8 +35,7 @@ void WriteChunk(Chunk* chunk, uint8_t value, int line)
 
 void WriteConstant(Chunk* chunk, Value value, int line)
 {
-	int index = chunk->constants.count;
-	WriteValueArray(&chunk->constants, value);
+	int index = AddConstant(chunk, value);
 
 	if (index > UINT8_MAX)
 	{
