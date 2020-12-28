@@ -1,6 +1,7 @@
 #include "value.h"
 
 #include "memory.h"
+#include "object.h"
 
 void InitValueArray(ValueArray* arr)
 {
@@ -27,6 +28,16 @@ void WriteValueArray(ValueArray* arr, Value value)
 	arr->count++;
 }
 
+void PrintObject(Value value)
+{
+	switch (OBJ_TYPE(value))
+	{
+	case OBJ_STRING: printf("%s", AS_CSTRING(value)); break;
+	default:
+		break;
+	}
+}
+
 void PrintValue(Value value)
 {
 	switch (value.type)
@@ -34,6 +45,7 @@ void PrintValue(Value value)
 	case VAL_NUMBER: printf("%g", AS_NUMBER(value)); break;
 	case VAL_BOOL: printf(AS_BOOL(value) ? "true" : "false"); break;
 	case VAL_NIL: printf("nil"); break;
+	case VAL_OBJ: PrintObject(value); break;
 	default:
 		break;
 	}

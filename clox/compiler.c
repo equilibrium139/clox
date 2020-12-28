@@ -1,6 +1,7 @@
 #include "compiler.h"
 
 #include "common.h"
+#include "object.h"
 #include "scanner.h"
 
 #ifdef DEBUG_PRINT_CORE
@@ -182,6 +183,11 @@ static void Literal()
 	}
 }
 
+static void String()
+{
+	EmitConstant(OBJ_VAL(ToObjString(parser.previous.start, parser.previous.length)));
+}
+
 ParseRule rules[] = {
 	[TOKEN_LEFT_PAREN] = {Grouping, NULL, PREC_NONE},
 	[TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
@@ -203,7 +209,7 @@ ParseRule rules[] = {
 	[TOKEN_LESS] = {NULL, Binary,   PREC_COMPARISON},
 	[TOKEN_LESS_EQUAL] = {Binary,     NULL,   PREC_COMPARISON},
 	[TOKEN_IDENTIFIER] = {NULL,     NULL,   PREC_NONE},
-	[TOKEN_STRING] = {NULL,     NULL,   PREC_NONE},
+	[TOKEN_STRING] = {String,     NULL,   PREC_NONE},
 	[TOKEN_NUMBER] = {Number,   NULL,   PREC_NONE},
 	[TOKEN_AND] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_CLASS] = {NULL,     NULL,   PREC_NONE},

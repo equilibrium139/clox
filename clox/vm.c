@@ -3,10 +3,13 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "common.h"
 #include "compiler.h"
 #include "debug.h"
+#include "memory.h"
+#include "object.h"
 
 VM vm;
 
@@ -18,11 +21,13 @@ static void ResetStack()
 void InitVM()
 {
 	ResetStack();
+	vm.objects = NULL;
 }
 
 void FreeVM()
 {
 	FreeValueArray(&vm.stack);
+	FreeObjects();
 }
 
 
@@ -76,16 +81,51 @@ static bool ValuesEqual(Value a, Value b)
 	case VAL_NUMBER: return AS_NUMBER(a) == AS_NUMBER(b);
 	case VAL_BOOL: return AS_BOOL(a) == AS_BOOL(b);
 	case VAL_NIL: return true;
+	case VAL_OBJ: {
+		ObjString* aString = AS_STRING(a);
+		ObjString* bString = AS_STRING(b);
+		return aString->length == bString->length && memcmp(aString->chars, bString->chars, aString->length) == 0;
+	}
 	default:
 		return false; // unreachable
 	}
+}
+
+// Assumes v is not already OBJ_STRING
+//static void StringifyNonString(Value v, char* buffer, int size)
+//{
+//	switch (v.type)
+//	{
+//	case VAL_BOOL: sprintf(buffer, AS_BOOL(v) ? "true" : "false"); break;
+//
+//	default:
+//		break;
+//	}
+//	// snprintf(buffer, size, "%f")
+//}
+
+// Concatenates a and b and result is stored in a (nothing is pushed)
+static void Concatenate()
+{
+	ObjString* b = AS_STRING(Pop());
+	ObjString* a = AS_STRING(Peek(0));
+	int length = a->length + b->length;
+	char* concatStr = ALLOCATE(char, length + 1);
+	memcpy(concatStr, a->chars, a->length);
+	memcpy(concatStr + a->length, b->chars, b->length);
+	concatStr[length] = '\0';
+	/*FREE_ARRAY(char, a->chars, a->length);
+	FREE_ARRAY(char, b->chars, b->length);*/
+	a->chars = concatStr;
+	a->length += b->length;
+	// FREE(ObjString, b);
 }
 
 static InterpretResult Run()
 {
 #define READ_BYTE() (*vm.ip++)
 #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])	
-// Can't use READ_BYTE() here because C++ doesn't guarantee left to right order of evaluation i.e. READ_BYTE() corresponding to READ_BYTE() << 16
+// Can't use READ_BYTE() here because C doesn't guarantee left to right order of evaluation i.e. READ_BYTE() corresponding to READ_BYTE() << 16
 // could get called before READ_BYTE() corresponding to READ_BYTE() << 8. Not good.
 #define READ_CONSTANT_LONG_INDEX() (*vm.ip | (vm.ip[1] << 8) | (vm.ip[2] << 16)) 
 #define READ_CONSTANT_LONG() (vm.chunk->constants.values[READ_CONSTANT_LONG_INDEX()])
@@ -203,7 +243,11 @@ static InterpretResult Run()
 		}
 		case OP_ADD:
 		{
-			BINARY_OP_MATH(+);
+			if (IS_STRING(Peek(0)) && IS_STRING(Peek(1)))
+			{
+				Concatenate();
+			}
+			else { BINARY_OP_MATH(+); }
 			break;
 		}
 		case OP_SUB:
