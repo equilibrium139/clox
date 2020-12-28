@@ -10,6 +10,13 @@
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value) ((ObjString*)AS_OBJ(value))->chars
 
+#define ALLOCATE_OBJ(type, objectType) \
+    (type*)AllocateObject(sizeof(type), objectType)
+
+#define ALLOCATE_OBJ_STRING(length) \
+    (ObjString*)AllocateObject(sizeof(ObjString) + sizeof(char) * (length) + 1, OBJ_STRING)
+
+
 typedef enum {
 	OBJ_STRING
 } ObjType;
@@ -24,7 +31,7 @@ struct ObjString
 {
 	Obj obj;
 	int length;
-	char* chars;
+	char chars[];
 };
 
 static inline bool IsObjType(Value value, ObjType type)
@@ -33,5 +40,6 @@ static inline bool IsObjType(Value value, ObjType type)
 }
 
 ObjString* ToObjString(const char* str, int length);
+Obj* AllocateObject(size_t size, ObjType type);
 
 #endif

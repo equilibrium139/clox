@@ -4,10 +4,7 @@
 #include "vm.h"
 #include <string.h>
 
-#define ALLOCATE_OBJ(type, objectType) \
-    (type*)AllocateObject(sizeof(type), objectType)
-
-static Obj* AllocateObject(size_t size, ObjType type)
+Obj* AllocateObject(size_t size, ObjType type)
 {
     Obj* object = (Obj*) reallocate(NULL, 0, size);
     object->type = type;
@@ -18,13 +15,17 @@ static Obj* AllocateObject(size_t size, ObjType type)
 
 ObjString* ToObjString(const char* str, int length)
 {
-    char* strHeapCopy = ALLOCATE(char, length + 1);
+    ObjString* string = ALLOCATE_OBJ_STRING(length);
+    memcpy(string->chars, str, length);
+    string->chars[length] = '\0';
+    string->length = length;
+   /* char* strHeapCopy = ALLOCATE(char, length + 1);
     memcpy(strHeapCopy, str, length);
     strHeapCopy[length] = '\0';
 
     ObjString* string = ALLOCATE_OBJ(ObjString, OBJ_STRING);
     string->length = length;
-    string->chars = strHeapCopy;
+    string->chars = strHeapCopy;*/
 
     return string;
 }

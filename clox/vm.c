@@ -104,20 +104,25 @@ static bool ValuesEqual(Value a, Value b)
 //	// snprintf(buffer, size, "%f")
 //}
 
-// Concatenates a and b and result is stored in a (nothing is pushed)
 static void Concatenate()
 {
 	ObjString* b = AS_STRING(Pop());
-	ObjString* a = AS_STRING(Peek(0));
+	ObjString* a = AS_STRING(Pop());
 	int length = a->length + b->length;
-	char* concatStr = ALLOCATE(char, length + 1);
+	ObjString* concatenated = ALLOCATE_OBJ_STRING(length);
+	memcpy(concatenated->chars, a->chars, a->length);
+	memcpy(concatenated->chars + a->length, b->chars, b->length);
+	concatenated->chars[length] = '\0';
+	concatenated->length = length;
+	Push(OBJ_VAL(concatenated));
+	/*char* concatStr = ALLOCATE(char, length + 1);
 	memcpy(concatStr, a->chars, a->length);
 	memcpy(concatStr + a->length, b->chars, b->length);
-	concatStr[length] = '\0';
+	concatStr[length] = '\0';*/
 	/*FREE_ARRAY(char, a->chars, a->length);
 	FREE_ARRAY(char, b->chars, b->length);*/
-	a->chars = concatStr;
-	a->length += b->length;
+	/*a->chars = concatStr;
+	a->length += b->length;*/
 	// FREE(ObjString, b);
 }
 
