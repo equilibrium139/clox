@@ -23,7 +23,8 @@ void FreeObject(Obj* obj)
 	{
 	case OBJ_STRING: {
 		ObjString* objString = (ObjString*)obj;
-		FREE_ARRAY(char, objString, sizeof(ObjString) + objString->length + 1);
+		if(objString->ownsChars) FREE_ARRAY(char, objString->chars, objString->length + 1);
+		FREE(ObjString, objString);
 	}
 	default:
 		break;

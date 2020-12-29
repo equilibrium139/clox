@@ -22,10 +22,12 @@ void InitVM()
 {
 	ResetStack();
 	vm.objects = NULL;
+	InitTable(&vm.strings);
 }
 
 void FreeVM()
 {
+	FreeTable(&vm.strings);
 	FreeValueArray(&vm.stack);
 	FreeObjects();
 }
@@ -82,9 +84,10 @@ static bool ValuesEqual(Value a, Value b)
 	case VAL_BOOL: return AS_BOOL(a) == AS_BOOL(b);
 	case VAL_NIL: return true;
 	case VAL_OBJ: {
-		ObjString* aString = AS_STRING(a);
+		return AS_OBJ(a) == AS_OBJ(b);
+		/*ObjString* aString = AS_STRING(a);
 		ObjString* bString = AS_STRING(b);
-		return aString->length == bString->length && memcmp(aString->chars, bString->chars, aString->length) == 0;
+		return aString->length == bString->length && memcmp(aString->chars, bString->chars, aString->length) == 0;*/
 	}
 	default:
 		return false; // unreachable
@@ -108,22 +111,15 @@ static void Concatenate()
 {
 	ObjString* b = AS_STRING(Pop());
 	ObjString* a = AS_STRING(Pop());
+
 	int length = a->length + b->length;
-	ObjString* concatenated = ALLOCATE_OBJ_STRING(length);
-	memcpy(concatenated->chars, a->chars, a->length);
-	memcpy(concatenated->chars + a->length, b->chars, b->length);
-	concatenated->chars[length] = '\0';
-	concatenated->length = length;
+	char* concatChars = ALLOCATE(char, length + 1);
+	memcpy(concatChars, a->chars, a->length);
+	memcpy(concatChars + a->length, b->chars, b->length);
+	concatChars[length] = '\0';
+
+	ObjString* concatenated = TakeString(concatChars, length, true);
 	Push(OBJ_VAL(concatenated));
-	/*char* concatStr = ALLOCATE(char, length + 1);
-	memcpy(concatStr, a->chars, a->length);
-	memcpy(concatStr + a->length, b->chars, b->length);
-	concatStr[length] = '\0';*/
-	/*FREE_ARRAY(char, a->chars, a->length);
-	FREE_ARRAY(char, b->chars, b->length);*/
-	/*a->chars = concatStr;
-	a->length += b->length;*/
-	// FREE(ObjString, b);
 }
 
 static InterpretResult Run()

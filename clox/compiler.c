@@ -185,7 +185,7 @@ static void Literal()
 
 static void String()
 {
-	EmitConstant(OBJ_VAL(ToObjString(parser.previous.start, parser.previous.length)));
+	EmitConstant(OBJ_VAL(TakeString(parser.previous.start, parser.previous.length, false)));
 }
 
 ParseRule rules[] = {
