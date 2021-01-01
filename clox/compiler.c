@@ -8,8 +8,10 @@
 #include "debug.h
 #endif // DEBUG_PRINT_CORE
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct
 {
@@ -46,6 +48,29 @@ typedef struct
 Parser parser;
 
 Chunk* compilingChunk;
+
+typedef struct
+{
+	Token name;
+	int depth;  // depth of -1 means undefined
+} Local;
+
+#define MAX_LOCALS 1000 // random number over 255 so I have an excuse to add _LONG_ op codes for local variable ops 
+
+typedef struct
+{
+	Local locals[MAX_LOCALS]; // Too lazy to make a dynamic array of Locals
+	int localsCount;
+	int currentScopeDepth;
+} Compiler;
+
+Compiler* currentCompiler;
+
+static void InitCompiler(Compiler* compiler)
+{
+	compiler->localsCount = compiler->currentScopeDepth = 0;
+	currentCompiler = compiler;
+}
 
 static Chunk* CurrentChunk()
 {
@@ -204,15 +229,54 @@ static void String(bool canAssign)
 	EmitConstant(OBJ_VAL(CopyString(parser.previous.start, parser.previous.length)));
 }
 
+static bool IdentifiersEqual(Token* a, Token* b)
+{
+	return a->length == b->length && memcmp(a->start, b->start, a->length) == 0;
+}
+
+static int ResolveLocal(Token* name)
+{
+	for (int i = currentCompiler->localsCount - 1; i >= 0; i--)
+	{
+		Local* local = &currentCompiler->locals[i];
+		if (IdentifiersEqual(name, &local->name))
+		{
+			if (local->depth == -1)
+			{
+				Error("Can't use variable in it's own initializer.");
+			}
+			else return i;
+		}
+	}
+
+	return -1;
+}
+
 static void NamedVariable(Token name, bool canAssign)
 {
-	int index = IdentifierConstant(&name);
+	OpCode getOp, getOpLong, setOp, setOpLong;
+	int index = ResolveLocal(&name);
+	if (index != -1)
+	{
+		getOp = OP_GET_LOCAL;
+		getOpLong = OP_GET_LOCAL_LONG;
+		setOp = OP_SET_LOCAL;
+		setOpLong = OP_SET_LOCAL_LONG;
+	}
+	else
+	{
+		index = IdentifierConstant(&name);
+		getOp = OP_GET_GLOBAL;
+		getOpLong = OP_GET_GLOBAL_LONG;
+		setOp = OP_SET_GLOBAL;
+		setOpLong = OP_SET_GLOBAL_LONG;
+	}
 	if (canAssign && Match(TOKEN_EQUAL))
 	{
 		Expression();
-		WriteIndexOp(CurrentChunk(), index, name.line, OP_SET_GLOBAL, OP_SET_GLOBAL_LONG);
+		WriteIndexOp(CurrentChunk(), index, name.line, setOp, setOpLong);
 	}
-	else { WriteIndexOp(CurrentChunk(), index, name.line, OP_GET_GLOBAL, OP_GET_GLOBAL_LONG); }
+	else { WriteIndexOp(CurrentChunk(), index, name.line, getOp, getOpLong); }
 }
 
 static void Variable(bool canAssign)
@@ -325,10 +389,47 @@ static void ExpressionStatement()
 	EmitByte(OP_POP);
 }
 
+static void Block()
+{
+	while (!Check(TOKEN_RIGHT_BRACE) && !Check(TOKEN_EOF))
+	{
+		Declaration();
+	}
+
+	Consume(TOKEN_RIGHT_BRACE, "Expect '}' at end of block.");
+}
+
+static void BeginScope()
+{
+	currentCompiler->currentScopeDepth++;
+}
+
+static void EndScope()
+{
+	int scopeToClose = currentCompiler->currentScopeDepth--;
+	int popCount = 0;
+	for (int i = currentCompiler->localsCount - 1; i >= 0; i--)
+	{
+		if (currentCompiler->locals[i].depth != scopeToClose) { break; }
+		popCount++;
+		currentCompiler->localsCount--;
+	}
+
+	assert(popCount <= UINT8_MAX);
+	EmitByte(OP_POPN);
+	EmitByte((uint8_t)popCount);
+}
+
 static void Statement()
 {
 	if (Match(TOKEN_PRINT)) {
 		PrintStatement();
+	}
+	else if (Match(TOKEN_LEFT_BRACE))
+	{
+		BeginScope();
+		Block();
+		EndScope();
 	}
 	else
 	{
@@ -368,15 +469,52 @@ static int IdentifierConstant(Token* identifier)
 	return AddConstant(CurrentChunk(), OBJ_VAL(CopyString(identifier->start, identifier->length)));
 }
 
+static void AddLocal(Token* name)
+{
+	if (currentCompiler->localsCount >= MAX_LOCALS)
+	{
+		Error("Too many local variables in function.");
+		return;
+	}
+	Local* local = &currentCompiler->locals[currentCompiler->localsCount++];
+	local->name = *name;
+	local->depth = -1;
+}
+
+static void DeclareVariable()
+{
+	Token* name = &parser.previous;
+	for (int i = currentCompiler->localsCount - 1; i >= 0; i--)
+	{
+		Local* local = &currentCompiler->locals[i];
+		if (local->depth != currentCompiler->currentScopeDepth) { break; }
+		if (IdentifiersEqual(&local->name, name))
+		{
+			Error("Already variable with this name in this scope.");
+		}
+	}
+
+	AddLocal(name);
+}
+
 static int ParseVariable(const char* errorMessage)
 {
 	Consume(TOKEN_IDENTIFIER, errorMessage);
+	if (currentCompiler->currentScopeDepth != 0)
+	{
+		DeclareVariable();
+		return 0; // dummy value, don't add local var to constants array
+	}
 	return IdentifierConstant(&parser.previous);
 }
 
-static int DefineVariable(int global, int line)
+static void DefineVariable(int global, int line)
 {
-	WriteGlobalDeclaration(CurrentChunk(), global, line);
+	if (currentCompiler->currentScopeDepth != 0)
+	{
+		currentCompiler->locals[currentCompiler->localsCount - 1].depth = currentCompiler->currentScopeDepth;
+	}
+	else WriteGlobalDeclaration(CurrentChunk(), global, line);
 }
 
 static void VarDeclaration()
@@ -417,6 +555,8 @@ bool Compile(const char* source, Chunk* chunk)
 	InitScanner(source);
 	compilingChunk = chunk;
 	parser.hadError = parser.panicMode = false;
+	Compiler compiler;
+	InitCompiler(&compiler);
 	Advance();
 	while (!Match(TOKEN_EOF))
 	{

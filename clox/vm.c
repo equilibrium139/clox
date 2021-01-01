@@ -46,6 +46,12 @@ Value Pop()
 	return vm.stack.values[vm.stack.count];
 }
 
+Value PopN(int n)
+{
+	vm.stack.count -= n;
+	return vm.stack.values[vm.stack.count];
+}
+
 Value Peek(int n)
 {
 	return vm.stack.values[vm.stack.count - 1 - n];
@@ -129,7 +135,7 @@ static InterpretResult Run()
 #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])	
 // Can't use READ_BYTE() here because C doesn't guarantee left to right order of evaluation i.e. READ_BYTE() corresponding to READ_BYTE() << 16
 // could get called before READ_BYTE() corresponding to READ_BYTE() << 8. Not good.
-#define READ_LONG_INDEX() (*vm.ip | (vm.ip[1] << 8) | (vm.ip[2] << 16)) 
+#define READ_LONG_INDEX() (vm.ip += 3, vm.ip[-3] | (vm.ip[-2] << 8) | (vm.ip[-1] << 16)) 
 #define READ_CONSTANT_LONG() (vm.chunk->constants.values[READ_LONG_INDEX()])
 #define PEEK_TOP() (vm.stack.values[vm.stack.count - 1])
 #define BINARY_OP(convertFunc, resultType, op) \
@@ -275,6 +281,11 @@ static InterpretResult Run()
 			break;
 		}
 		case OP_POP: { Pop(); break; }
+		case OP_POPN:
+		{
+			PopN(READ_BYTE());
+			break;
+		}
 		case OP_DEFINE_GLOBAL:
 		{
 			ObjString* name = READ_STRING(READ_BYTE());
@@ -328,6 +339,28 @@ static InterpretResult Run()
 				RuntimeError("Undefined variable '%s'.", name->chars);
 				return INTERPRET_RUNTIME_ERROR;
 			}
+			break;
+		}
+		case OP_GET_LOCAL:
+		{
+			Push(vm.stack.values[READ_BYTE()]);
+			break;
+		}
+		case OP_GET_LOCAL_LONG:
+		{
+			Push(vm.stack.values[READ_LONG_INDEX()]);
+			break;
+		}
+		case OP_SET_LOCAL:
+		{
+			Value* local = &vm.stack.values[READ_BYTE()];
+			*local = PEEK_TOP();
+			break;
+		}
+		case OP_SET_LOCAL_LONG:
+		{
+			Value* local = &vm.stack.values[READ_LONG_INDEX()];
+			*local = PEEK_TOP();
 			break;
 		}
 		case OP_RETURN:
