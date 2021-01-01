@@ -19,9 +19,9 @@ typedef struct
 
 void InitTable(Table* table);
 void FreeTable(Table* table);
-bool SetTable(Table* table, ObjString* key, Value value);
+bool TableSet(Table* table, ObjString* key, Value value);
 void TableAddAll(Table* from, Table* to);
-void TableGet(Table* table, ObjString* key, Value* outValue);
+bool TableGet(Table* table, ObjString* key, Value* outValue);
 bool TableDelete(Table* table, ObjString* key);
 ObjString* TableFindString(Table* table, const char* chars, int length, uint32_t hash);
 

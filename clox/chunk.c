@@ -32,23 +32,30 @@ void WriteChunk(Chunk* chunk, uint8_t value, int line)
 
 	WriteLine(&chunk->line_runs, line);
 }
-
-void WriteConstant(Chunk* chunk, Value value, int line)
+ 
+void WriteIndexOp(Chunk* chunk, int index, int line, OpCode shortOp, OpCode longOp)
 {
-	int index = AddConstant(chunk, value);
-
 	if (index > UINT8_MAX)
 	{
-		WriteChunk(chunk, OP_CONSTANT_LONG, line);
+		WriteChunk(chunk, longOp, line);
 		WriteChunk(chunk, index & 0x000000FF, line);
 		WriteChunk(chunk, (index & 0x0000FF00) >> 8, line);
 		WriteChunk(chunk, (index & 0x00FF0000) >> 16, line);
 	}
 	else
 	{
-		WriteChunk(chunk, OP_CONSTANT, line);
+		WriteChunk(chunk, shortOp, line);
 		WriteChunk(chunk, index, line);
 	}
+}
+
+int WriteConstant(Chunk* chunk, Value value, int line)
+{
+	int index = AddConstant(chunk, value);
+
+	WriteIndexOp(chunk, index, line, OP_CONSTANT, OP_CONSTANT_LONG);
+
+	return index;
 }
 
 int AddConstant(Chunk* chunk, Value value)
@@ -67,4 +74,9 @@ int GetLine(Chunk* chunk, int instr_index)
 	}
 
 	return chunk->line_runs.runs[line_run_index].line;
+}
+
+void WriteGlobalDeclaration(Chunk* chunk, int index, int line)
+{
+	WriteIndexOp(chunk, index, line, OP_DEFINE_GLOBAL, OP_DEFINE_GLOBAL_LONG);
 }

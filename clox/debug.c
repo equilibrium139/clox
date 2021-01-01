@@ -89,6 +89,22 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 		return SimpleInstruction("OP_MULT", offset);
 	case OP_DIV:
 		return SimpleInstruction("OP_DIV", offset);
+	case OP_PRINT:
+		return SimpleInstruction("OP_PRINT", offset);
+	case OP_POP:
+		return SimpleInstruction("OP_POP", offset);
+	case OP_DEFINE_GLOBAL:
+		return ConstantInstruction("OP_DEFINE_GLOBAL", chunk, offset);
+	case OP_DEFINE_GLOBAL_LONG:
+		return ConstantLongInstruction("OP_DEFINE_GLOBAL_LONG", chunk, offset);
+	case OP_GET_GLOBAL:
+		return ConstantInstruction("OP_GET_GLOBAL", chunk, offset);
+	case OP_GET_GLOBAL_LONG:
+		return ConstantLongInstruction("OP_GET_GLOBAL_LONG", chunk, offset);
+	case OP_SET_GLOBAL:
+		return ConstantInstruction("OP_SET_GLOBAL", chunk, offset);
+	case OP_SET_GLOBAL_LONG:
+		return ConstantLongInstruction("OP_SET_GLOBAL_LONG", chunk, offset);
 	case OP_RETURN:
 		return SimpleInstruction("OP_RETURN", offset);
 	default:

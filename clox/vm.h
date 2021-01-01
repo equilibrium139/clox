@@ -14,6 +14,7 @@ typedef struct
 	// Value stack[STACK_MAX];
 	ValueArray stack;
 	Table strings;
+	Table globals;
 	Obj* objects;
 } VM;
 

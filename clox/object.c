@@ -23,7 +23,7 @@ static ObjString* AllocateString(char* chars, int length, bool ownsChars, uint32
     string->ownsChars = ownsChars;
     string->hash = hash;
 
-    SetTable(&vm.strings, string, NIL_VAL);
+    TableSet(&vm.strings, string, NIL_VAL);
 
     return string;
 }

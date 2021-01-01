@@ -23,11 +23,13 @@ void InitVM()
 	ResetStack();
 	vm.objects = NULL;
 	InitTable(&vm.strings);
+	InitTable(&vm.globals);
 }
 
 void FreeVM()
 {
 	FreeTable(&vm.strings);
+	FreeTable(&vm.globals);
 	FreeValueArray(&vm.stack);
 	FreeObjects();
 }
@@ -49,7 +51,6 @@ Value Peek(int n)
 	return vm.stack.values[vm.stack.count - 1 - n];
 }
 
-
 static void RuntimeError(const char* format, ...)
 {
 	va_list args;
@@ -59,7 +60,7 @@ static void RuntimeError(const char* format, ...)
 	fputs("\n", stderr);
 
 	size_t instruction_index = vm.ip - vm.chunk->code - 1;
-	int line = vm.chunk->code[instruction_index];
+	int line = GetLine(vm.chunk, instruction_index);
 	fprintf(stderr, "[line %d] in script\n", line);
 
 	ResetStack();
@@ -128,8 +129,8 @@ static InterpretResult Run()
 #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])	
 // Can't use READ_BYTE() here because C doesn't guarantee left to right order of evaluation i.e. READ_BYTE() corresponding to READ_BYTE() << 16
 // could get called before READ_BYTE() corresponding to READ_BYTE() << 8. Not good.
-#define READ_CONSTANT_LONG_INDEX() (*vm.ip | (vm.ip[1] << 8) | (vm.ip[2] << 16)) 
-#define READ_CONSTANT_LONG() (vm.chunk->constants.values[READ_CONSTANT_LONG_INDEX()])
+#define READ_LONG_INDEX() (*vm.ip | (vm.ip[1] << 8) | (vm.ip[2] << 16)) 
+#define READ_CONSTANT_LONG() (vm.chunk->constants.values[READ_LONG_INDEX()])
 #define PEEK_TOP() (vm.stack.values[vm.stack.count - 1])
 #define BINARY_OP(convertFunc, resultType, op) \
 	do { \
@@ -145,6 +146,7 @@ static InterpretResult Run()
 
 #define BINARY_OP_CMP(op) BINARY_OP(AS_BOOL, VAL_BOOL, op)
 #define BINARY_OP_MATH(op) BINARY_OP(AS_NUMBER, VAL_NUMBER, op)
+#define READ_STRING(index) AS_STRING(vm.chunk->constants.values[index])
 
 	while (true)
 	{
@@ -266,10 +268,72 @@ static InterpretResult Run()
 			BINARY_OP_MATH(/);
 			break;
 		}
-		case OP_RETURN:
+		case OP_PRINT:
 		{
 			PrintValue(Pop());
 			printf("\n");
+			break;
+		}
+		case OP_POP: { Pop(); break; }
+		case OP_DEFINE_GLOBAL:
+		{
+			ObjString* name = READ_STRING(READ_BYTE());
+			TableSet(&vm.globals, name, PEEK_TOP());
+			Pop();
+			break;
+		}
+		case OP_DEFINE_GLOBAL_LONG:
+		{
+			ObjString* name = READ_STRING(READ_LONG_INDEX());
+			TableSet(&vm.globals, name, PEEK_TOP());
+			Pop();
+			break;
+		}
+		case OP_GET_GLOBAL:
+		{
+			ObjString* name = READ_STRING(READ_BYTE());
+			Value toPush;
+			if (TableGet(&vm.globals, name, &toPush))
+			{
+				Push(toPush);
+			}
+			else
+			{
+				RuntimeError("Undefined variable '%s'.", name->chars);
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			break;
+		}
+		case OP_GET_GLOBAL_LONG:
+		{
+			ObjString* name = READ_STRING(READ_LONG_INDEX());
+			Value toPush;
+			if (TableGet(&vm.globals, name, &toPush))
+			{
+				Push(toPush);
+			}
+			else
+			{
+				RuntimeError("Undefined variable '%s'.", name->chars);
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			break;
+		}
+		case OP_SET_GLOBAL:
+		{
+			ObjString* name = READ_STRING(READ_BYTE());
+			if (TableSet(&vm.globals, name, PEEK_TOP())) 
+			{
+				TableDelete(&vm.globals, name);
+				RuntimeError("Undefined variable '%s'.", name->chars);
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			break;
+		}
+		case OP_RETURN:
+		{
+			/*PrintValue(Pop());
+			printf("\n");*/
 			return INTERPRET_OK;
 		}
 		default:
@@ -285,6 +349,7 @@ static InterpretResult Run()
 #undef BINARY_OP
 #undef BINARY_OP_CMP
 #undef BINARY_OP_MATH
+#undef READ_STRING
 }
 
 InterpretResult Interpret(const char* source)

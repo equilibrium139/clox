@@ -82,7 +82,7 @@ static void AdjustCapacity(Table* table, int capacity)
 	FREE_ARRAY(Entry, old, oldCapacity);
 }
 
-bool SetTable(Table* table, ObjString* key, Value value)
+bool TableSet(Table* table, ObjString* key, Value value)
 {
 	if (table->count >= table->capacity * TABLE_MAX_LOAD)
 	{
@@ -108,12 +108,12 @@ void TableAddAll(Table* from, Table* to)
 		Entry* entry = &from->entries[i];
 		if (entry->key != NULL)
 		{
-			SetTable(to, entry->key, entry->value);
+			TableSet(to, entry->key, entry->value);
 		}
 	}
 }
 
-void TableGet(Table* table, ObjString* key, Value* outValue)
+bool TableGet(Table* table, ObjString* key, Value* outValue)
 {
 	if (table->count == 0) { return false; }
 
