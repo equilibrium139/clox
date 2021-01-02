@@ -19,8 +19,8 @@ void FreeLineRunArray(LineRunArray* arr)
 
 void WriteLine(LineRunArray* arr, int line)
 {
-	assert(arr->count == 0 || arr->runs[arr->count - 1].line <= line && 
-			"Lines must be written in ascending order.");
+	/*assert(arr->count == 0 || arr->runs[arr->count - 1].line <= line && 
+			"Lines must be written in ascending order.");*/
 
 	if (arr->count > 0 && arr->runs[arr->count - 1].line == line)
 	{

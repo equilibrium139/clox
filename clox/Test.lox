@@ -1,18 +1,4 @@
+for(var i = 0; i < 10; i = i + 1)
 {
-  var x = 10;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
-  var y = 1290;
+  print i;
 }

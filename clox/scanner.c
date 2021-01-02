@@ -81,7 +81,7 @@ static void SkipWhitespace()
 			{
 				scanner.current += 2;
 				while (*scanner.current != '\n' && !IsAtEnd()) { scanner.current++; }
-				break;	// TODO check if this break is necessary
+				break;
 			}
 			else
 			{

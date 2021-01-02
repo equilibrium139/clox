@@ -173,16 +173,11 @@ static InterpretResult Run()
 		case OP_CONSTANT: {
 			Value constant = READ_CONSTANT();
 			Push(constant);
-			PrintValue(constant);
-			printf("\n");
 			break;
 		}
 		case OP_CONSTANT_LONG: {
 			Value constant = READ_CONSTANT_LONG();
 			Push(constant);
-			vm.ip += 3;
-			PrintValue(constant);
-			printf("\n");
 			break;
 		}
 		case OP_NIL: {
@@ -361,6 +356,36 @@ static InterpretResult Run()
 		{
 			Value* local = &vm.stack.values[READ_LONG_INDEX()];
 			*local = PEEK_TOP();
+			break;
+		}
+		case OP_JUMP:
+		{
+			int offset = READ_LONG_INDEX();
+			vm.ip += offset;
+			break;
+		}
+		case OP_JUMP_IF_FALSE:
+		{
+			int offset = READ_LONG_INDEX();
+			if (IsFalsey(PEEK_TOP()))
+			{
+				vm.ip += offset;
+			}
+			break;
+		}
+		case OP_JUMP_IF_TRUE:
+		{
+			int offset = READ_LONG_INDEX();
+			if (!IsFalsey(PEEK_TOP()))
+			{
+				vm.ip += offset;
+			}
+			break;
+		}
+		case OP_JUMP_BACK:
+		{
+			int offset = READ_LONG_INDEX();
+			vm.ip -= offset;
 			break;
 		}
 		case OP_RETURN:

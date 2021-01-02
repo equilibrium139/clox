@@ -7,6 +7,7 @@
 void DisassembleChunk(Chunk* chunk, const char* name)
 {
 	printf("== %s ==\n", name);
+	printf("OpCode	Line	Name\n");
 	for (int i = 0; i < chunk->count;)
 	{
 		i = DisassembleInstruction(chunk, i);
@@ -37,11 +38,20 @@ static int ConstantLongInstruction(const char* name, Chunk* chunk, int offset)
 	return offset + 4;
 }
 
-static int ByteInstruction(const char* name, Chunk* chunk, int offset)
+// Used for instructions that are followed by indices that are not related to the constant value array
+
+static int IndexInstruction(const char* name, Chunk* chunk, int offset)
 {
 	uint8_t slot = chunk->code[offset + 1];
-	printf("%-16s %4d '", name, slot);
+	printf("%-16s %4d\n", name, slot);
 	return offset + 2;
+}
+
+static int IndexLongInstruction(const char* name, Chunk* chunk, int offset)
+{
+	int index = (chunk->code[offset + 1]) | (chunk->code[offset + 2] << 8) | (chunk->code[offset + 3] << 16);
+	printf("%-16s %4d\n", name, index);
+	return offset + 4;
 }
 
 int DisassembleInstruction(Chunk* chunk, int offset)
@@ -52,11 +62,11 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 
 	if (offset > 0 && line == GetLine(chunk, offset - 1))
 	{
-		printf("	| ");
+		printf("	|    ");
 	}
 	else
 	{
-		printf("%4d ", line);
+		printf("%4d    ", line);
 	}
 
 	uint8_t instruction = chunk->code[offset];
@@ -115,13 +125,21 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 	case OP_SET_GLOBAL_LONG:
 		return ConstantLongInstruction("OP_SET_GLOBAL_LONG", chunk, offset);
 	case OP_GET_LOCAL:
-		return ConstantInstruction("OP_GET_LOCAL", chunk, offset);
+		return IndexInstruction("OP_GET_LOCAL", chunk, offset);
 	case OP_GET_LOCAL_LONG:
-		return ConstantLongInstruction("OP_GET_LOCAL_LONG", chunk, offset);
+		return IndexLongInstruction("OP_GET_LOCAL_LONG", chunk, offset);
 	case OP_SET_LOCAL:
-		return ConstantInstruction("OP_SET_LOCAL", chunk, offset);
+		return IndexInstruction("OP_SET_LOCAL", chunk, offset);
 	case OP_SET_LOCAL_LONG:
-		return ConstantLongInstruction("OP_SET_LOCAL_LONG", chunk, offset);
+		return IndexLongInstruction("OP_SET_LOCAL_LONG", chunk, offset);
+	case OP_JUMP:
+		return IndexLongInstruction("OP_JUMP", chunk, offset);
+	case OP_JUMP_IF_FALSE:
+		return IndexLongInstruction("OP_JUMP_IF_FALSE", chunk, offset);
+	case OP_JUMP_IF_TRUE:
+		return IndexLongInstruction("OP_JUMP_IF_TRUE", chunk, offset);
+	case OP_JUMP_BACK:
+		return IndexLongInstruction("OP_JUMP_BACK", chunk, offset);
 	case OP_RETURN:
 		return SimpleInstruction("OP_RETURN", offset);
 	default:

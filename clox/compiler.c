@@ -55,7 +55,7 @@ typedef struct
 	int depth;  // depth of -1 means undefined
 } Local;
 
-#define MAX_LOCALS 1000 // random number over 255 so I have an excuse to add _LONG_ op codes for local variable ops 
+#define MAX_LOCALS 500 // random number over 255 so I have an excuse to add _LONG_ op codes for local variable ops 
 
 typedef struct
 {
@@ -166,6 +166,9 @@ static void Statement();
 static void Declaration();
 static ParseRule* GetRule(TokenType type);
 static void ParsePrecedence(Precedence);
+static void And(bool);
+static void Or(bool);
+static void VarDeclaration();
 
 static void Grouping(bool canAssign)
 {
@@ -303,11 +306,11 @@ ParseRule rules[] = {
 	[TOKEN_GREATER] = {NULL,     Binary,   PREC_COMPARISON},
 	[TOKEN_GREATER_EQUAL] = {NULL,     Binary,   PREC_COMPARISON},
 	[TOKEN_LESS] = {NULL, Binary,   PREC_COMPARISON},
-	[TOKEN_LESS_EQUAL] = {Binary,     NULL,   PREC_COMPARISON},
+	[TOKEN_LESS_EQUAL] = {NULL,     Binary,   PREC_COMPARISON},
 	[TOKEN_IDENTIFIER] = {Variable,     NULL,   PREC_NONE},
 	[TOKEN_STRING] = {String,     NULL,   PREC_NONE},
 	[TOKEN_NUMBER] = {Number,   NULL,   PREC_NONE},
-	[TOKEN_AND] = {NULL,     NULL,   PREC_NONE},
+	[TOKEN_AND] = {NULL,     And,   PREC_AND},
 	[TOKEN_CLASS] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_ELSE] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_FALSE] = {Literal,     NULL,   PREC_NONE},
@@ -315,7 +318,8 @@ ParseRule rules[] = {
 	[TOKEN_FUN] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_IF] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_NIL] = {Literal,     NULL,   PREC_NONE},
-	[TOKEN_OR] = {NULL,     NULL,   PREC_NONE},
+	[TOKEN_OR] = {NULL,     Or,   PREC_OR},
+	[TOKEN_OR] = {NULL,     Or,   PREC_OR},
 	[TOKEN_PRINT] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_RETURN] = {NULL,     NULL,   PREC_NONE},
 	[TOKEN_SUPER] = {NULL,     NULL,   PREC_NONE},
@@ -416,8 +420,173 @@ static void EndScope()
 	}
 
 	assert(popCount <= UINT8_MAX);
-	EmitByte(OP_POPN);
-	EmitByte((uint8_t)popCount);
+	if (popCount > 0)
+	{
+		EmitByte(OP_POPN);
+		EmitByte((uint8_t)popCount);
+	}
+}
+
+static int EmitJump(OpCode op)
+{
+	EmitByte(op);
+	EmitByte(0xFF);
+	EmitByte(0xFF);
+	EmitByte(0xFF);
+	return CurrentChunk()->count - 3;
+}
+
+static void PatchJump(int jumpIndex)
+{
+	int dest = CurrentChunk()->count;
+	int offset = dest - jumpIndex - 3; // exclude the 3 bytes used to store offset
+
+	CurrentChunk()->code[jumpIndex] = offset & 0xFF;
+	CurrentChunk()->code[jumpIndex + 1] = (offset >> 8) & 0xFF;
+	CurrentChunk()->code[jumpIndex + 2] = (offset >> 16) & 0xFF;
+}
+
+static void IfStatement()
+{
+	Consume(TOKEN_LEFT_PAREN, "Expect '(' before if condition.");
+	Expression();
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after if condition.");
+
+	int falseJump = EmitJump(OP_JUMP_IF_FALSE);
+
+	EmitByte(OP_POP); // Pop condition expression for true case
+	Statement();
+	int trueJump = EmitJump(OP_JUMP);
+
+	PatchJump(falseJump);
+
+	EmitByte(OP_POP); // Pop condition expression for false case
+
+	if (Match(TOKEN_ELSE))
+	{
+		Statement();
+	}
+
+	PatchJump(trueJump);
+}
+
+static void EmitLoopJump(int jumpDestination)
+{
+	assert(jumpDestination < CurrentChunk()->count);
+
+	EmitByte(OP_JUMP_BACK);
+
+	int offset = CurrentChunk()->count - jumpDestination + 3; // include 3 bytes
+	EmitByte(offset & 0xFF);
+	EmitByte((offset >> 8) & 0xFF);
+	EmitByte((offset >> 16) & 0xFF);
+}
+
+static void And(bool canAssign)
+{
+	int falseJump = EmitJump(OP_JUMP_IF_FALSE);
+
+	EmitByte(OP_POP);
+	ParsePrecedence(PREC_AND);
+
+	PatchJump(falseJump);
+}
+
+static void Or(bool canAssign)
+{
+	int trueJump = EmitJump(OP_JUMP_IF_TRUE);
+
+	EmitByte(OP_POP);
+	ParsePrecedence(PREC_OR);
+
+	PatchJump(trueJump);
+}
+
+
+static void WhileStatement()
+{
+	Consume(TOKEN_LEFT_PAREN, "Expect '(' before while condition.");
+
+	int loopJumpLocation = CurrentChunk()->count;
+	Expression();
+
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after while condition.");
+
+	int falseJump = EmitJump(OP_JUMP_IF_FALSE);
+	EmitByte(OP_POP); // true case condition pop
+	Statement();
+	EmitLoopJump(loopJumpLocation);
+
+	PatchJump(falseJump);
+	EmitByte(OP_POP); // false case condition pop
+}
+
+// for(init; cnd; incr)
+static void ForStatement()
+{
+	Consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+
+	bool hasInitializer = !Match(TOKEN_SEMICOLON);
+	if (hasInitializer)
+	{
+		if (Match(TOKEN_VAR)) 
+		{
+			BeginScope();
+			VarDeclaration();
+		}
+		else {
+			/*Expression();
+			Consume(TOKEN_SEMICOLON, "Expect ';' after for loop initializer.");*/
+			ExpressionStatement();
+		}
+	}
+
+	int falseJumpIndex = -1;
+	int conditionBeginIndex = 0, conditionEndIndex = 0;
+	if (!Match(TOKEN_SEMICOLON))
+	{
+		conditionBeginIndex = CurrentChunk()->count;
+		// condition- note for self: NOT ExpressionStatement() b/c we want value of condition to remain on stack
+		Expression(); 
+		conditionEndIndex = CurrentChunk()->count;
+		Consume(TOKEN_SEMICOLON, "Expect ';' after for loop condition.");
+		falseJumpIndex = EmitJump(OP_JUMP_IF_FALSE);
+	}
+
+	// This jump prevents the "increment" from running before the first iteration of the loop
+	int conditionAndIncrJump = EmitJump(OP_JUMP);
+	int loopJumpLocation = CurrentChunk()->count;
+
+	// Copy condition
+	for (int i = conditionBeginIndex; i < conditionEndIndex; i++)
+	{
+		EmitByte(CurrentChunk()->code[i]);
+	}
+
+	int falseJumpIndex2 = -1;
+	if (conditionBeginIndex != conditionEndIndex)  falseJumpIndex2 = EmitJump(OP_JUMP_IF_FALSE);
+
+	if (!Match(TOKEN_SEMICOLON))
+	{
+		Expression(); // increment
+	}
+
+	PatchJump(conditionAndIncrJump);
+
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' before for loop body.");
+
+	EmitByte(OP_POP); // pop condition true case
+	Statement(); // loop body
+	EmitLoopJump(loopJumpLocation);
+	
+	if (falseJumpIndex > -1)
+	{
+		PatchJump(falseJumpIndex);
+		PatchJump(falseJumpIndex2);
+		EmitByte(OP_POP); // pop condition false case
+	}
+
+	if (hasInitializer) { EndScope(); }
 }
 
 static void Statement()
@@ -430,6 +599,18 @@ static void Statement()
 		BeginScope();
 		Block();
 		EndScope();
+	}
+	else if (Match(TOKEN_IF))
+	{
+		IfStatement();
+	}
+	else if (Match(TOKEN_WHILE))
+	{
+		WhileStatement();
+	}
+	else if (Match(TOKEN_FOR))
+	{
+		ForStatement();
 	}
 	else
 	{
