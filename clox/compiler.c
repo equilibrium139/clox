@@ -526,11 +526,12 @@ static void ForStatement()
 {
 	Consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
 
-	bool hasInitializer = !Match(TOKEN_SEMICOLON);
-	if (hasInitializer)
+	bool hasInitializer = false;
+	if (!Match(TOKEN_SEMICOLON))
 	{
 		if (Match(TOKEN_VAR)) 
 		{
+			hasInitializer = true;
 			BeginScope();
 			VarDeclaration();
 		}
@@ -549,8 +550,11 @@ static void ForStatement()
 		// condition- note for self: NOT ExpressionStatement() b/c we want value of condition to remain on stack
 		Expression(); 
 		conditionEndIndex = CurrentChunk()->count;
+
 		Consume(TOKEN_SEMICOLON, "Expect ';' after for loop condition.");
+
 		falseJumpIndex = EmitJump(OP_JUMP_IF_FALSE);
+		EmitByte(OP_POP);
 	}
 
 	// This jump prevents the "increment" from running before the first iteration of the loop
@@ -563,19 +567,43 @@ static void ForStatement()
 		EmitByte(CurrentChunk()->code[i]);
 	}
 
+	// TODO fix this super ugly logic.
+
+	/*
+		It's not easy to generate the bytecode for increment and simply append it to the bytecode for the 
+		for loop body so this ugly logic is somewhat necessary and simpler. The bytecode for the condition is 
+		generated twice. The first time the condition bytecode is generated, it is followed by a jump instruction
+		which skips over the second condition bytecode and the increment bytecode, preventing the increment code 
+		from running before the loop body. 
+
+		1. condition_bytecode1
+		2. jump_if_false 9 // (here '9' is absolute index but in actual bytecode it's stored as offset aka 9-2 = 7 instead).
+		3. jump 5	// condition met the first time around, execute loop body and skip increment
+		4. condition_bytecode2
+		5. jump_if_false 9
+		6. increment_bytecode
+		7. while_loop_body
+		8. jump 4	// jump back to condition_bytecode2 and run increment code
+		9. ... 
+	*/
+
 	int falseJumpIndex2 = -1;
-	if (conditionBeginIndex != conditionEndIndex)  falseJumpIndex2 = EmitJump(OP_JUMP_IF_FALSE);
+	if (conditionBeginIndex != conditionEndIndex) {
+		falseJumpIndex2 = EmitJump(OP_JUMP_IF_FALSE);
+		EmitByte(OP_POP);
+	}
 
 	if (!Match(TOKEN_SEMICOLON))
 	{
 		Expression(); // increment
+		EmitByte(OP_POP); // pop incr value
 	}
 
 	PatchJump(conditionAndIncrJump);
 
 	Consume(TOKEN_RIGHT_PAREN, "Expect ')' before for loop body.");
 
-	EmitByte(OP_POP); // pop condition true case
+	// EmitByte(OP_POP); // pop condition true case
 	Statement(); // loop body
 	EmitLoopJump(loopJumpLocation);
 	
@@ -583,8 +611,10 @@ static void ForStatement()
 	{
 		PatchJump(falseJumpIndex);
 		PatchJump(falseJumpIndex2);
-		EmitByte(OP_POP); // pop condition false case
 	}
+
+	EmitByte(OP_POP); // pop condition false case
+
 
 	if (hasInitializer) { EndScope(); }
 }
