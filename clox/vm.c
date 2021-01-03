@@ -211,6 +211,12 @@ static InterpretResult Run()
 			AS_NUMBER(PEEK_TOP()) = -AS_NUMBER(PEEK_TOP());
 			break;
 		}
+		case OP_EQUAL_SWITCH:
+		{
+			PEEK_TOP().as.boolean = ValuesEqual(Peek(0), Peek(1));
+			PEEK_TOP().type = VAL_BOOL;
+			break;
+		}
 		case OP_EQUAL:
 		{
 			Value b = Pop();

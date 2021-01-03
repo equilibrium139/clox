@@ -38,7 +38,7 @@ static int ConstantLongInstruction(const char* name, Chunk* chunk, int offset)
 	return offset + 4;
 }
 
-// Used for instructions that are followed by indices that are not related to the constant value array
+// Used for instructions that are followed by indices/numbers that are not related to the constant value array
 
 static int IndexInstruction(const char* name, Chunk* chunk, int offset)
 {
@@ -86,6 +86,8 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 		return SimpleInstruction("OP_NOT", offset);
 	case OP_NEGATE:
 		return SimpleInstruction("OP_NEGATE", offset);
+	case OP_EQUAL_SWITCH:
+		return SimpleInstruction("OP_EQUAL_SWITCH", offset);
 	case OP_EQUAL: 
 		return SimpleInstruction("OP_EQUAL", offset);
 	case OP_NOT_EQUAL:
@@ -111,7 +113,7 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 	case OP_POP:
 		return SimpleInstruction("OP_POP", offset);
 	case OP_POPN:
-		return ConstantInstruction("OP_POPN", chunk, offset);
+		return IndexInstruction("OP_POPN", chunk, offset);
 	case OP_DEFINE_GLOBAL:
 		return ConstantInstruction("OP_DEFINE_GLOBAL", chunk, offset);
 	case OP_DEFINE_GLOBAL_LONG:

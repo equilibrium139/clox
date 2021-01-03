@@ -521,7 +521,23 @@ static void WhileStatement()
 	EmitByte(OP_POP); // false case condition pop
 }
 
-// for(init; cnd; incr)
+/*
+	It's not easy to generate the bytecode for increment and simply append it to the bytecode for the
+	for loop body so this ugly logic is somewhat necessary and simpler. The bytecode for the condition is
+	generated twice. The first time the condition bytecode is generated, it is followed by a jump instruction
+	which skips over the second condition bytecode and the increment bytecode, preventing the increment code
+	from running before the loop body.
+
+	1. condition_bytecode1
+	2. jump_if_false 9 // (here '9' is absolute index but in actual bytecode it's stored as offset aka 9-2 = 7 instead).
+	3. jump 7	// condition met the first time around, execute loop body and skip increment
+	4. condition_bytecode2
+	5. jump_if_false 9
+	6. increment_bytecode
+	7. while_loop_body
+	8. jump 4	// jump back to condition_bytecode2 and run increment code
+	9. ...
+*/
 static void ForStatement()
 {
 	Consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
@@ -542,7 +558,7 @@ static void ForStatement()
 		}
 	}
 
-	int falseJumpIndex = -1;
+	int preLoopFalseJump = -1;
 	int conditionBeginIndex = 0, conditionEndIndex = 0;
 	if (!Match(TOKEN_SEMICOLON))
 	{
@@ -553,7 +569,7 @@ static void ForStatement()
 
 		Consume(TOKEN_SEMICOLON, "Expect ';' after for loop condition.");
 
-		falseJumpIndex = EmitJump(OP_JUMP_IF_FALSE);
+		preLoopFalseJump = EmitJump(OP_JUMP_IF_FALSE);
 		EmitByte(OP_POP);
 	}
 
@@ -567,33 +583,13 @@ static void ForStatement()
 		EmitByte(CurrentChunk()->code[i]);
 	}
 
-	// TODO fix this super ugly logic.
-
-	/*
-		It's not easy to generate the bytecode for increment and simply append it to the bytecode for the 
-		for loop body so this ugly logic is somewhat necessary and simpler. The bytecode for the condition is 
-		generated twice. The first time the condition bytecode is generated, it is followed by a jump instruction
-		which skips over the second condition bytecode and the increment bytecode, preventing the increment code 
-		from running before the loop body. 
-
-		1. condition_bytecode1
-		2. jump_if_false 9 // (here '9' is absolute index but in actual bytecode it's stored as offset aka 9-2 = 7 instead).
-		3. jump 5	// condition met the first time around, execute loop body and skip increment
-		4. condition_bytecode2
-		5. jump_if_false 9
-		6. increment_bytecode
-		7. while_loop_body
-		8. jump 4	// jump back to condition_bytecode2 and run increment code
-		9. ... 
-	*/
-
-	int falseJumpIndex2 = -1;
+	int postLoopFalseJump = -1;
 	if (conditionBeginIndex != conditionEndIndex) {
-		falseJumpIndex2 = EmitJump(OP_JUMP_IF_FALSE);
+		postLoopFalseJump = EmitJump(OP_JUMP_IF_FALSE);
 		EmitByte(OP_POP);
 	}
 
-	if (!Match(TOKEN_SEMICOLON))
+	if (!Check(TOKEN_RIGHT_PAREN))
 	{
 		Expression(); // increment
 		EmitByte(OP_POP); // pop incr value
@@ -607,16 +603,74 @@ static void ForStatement()
 	Statement(); // loop body
 	EmitLoopJump(loopJumpLocation);
 	
-	if (falseJumpIndex > -1)
+	if (preLoopFalseJump > -1)
 	{
-		PatchJump(falseJumpIndex);
-		PatchJump(falseJumpIndex2);
+		PatchJump(preLoopFalseJump);
+		PatchJump(postLoopFalseJump);
+		EmitByte(OP_POP); // pop condition false case
 	}
 
-	EmitByte(OP_POP); // pop condition false case
-
-
 	if (hasInitializer) { EndScope(); }
+}
+
+// We need value being switched on to stay on the stack. Solution: OP_EQUAL_SWITCH. This is similar to
+// OP_EQUAL except it doesn't pop both values, it simply replaces the second operand (the top value on the stack)
+// with the truth value of the operation. Ex:
+// switch(x) case 1 case 2 etc... x = 2
+// Stack: [x] [1] -> OP_EQUAL_SWITCH -> [x] [false] -> OP_POP -> [x] -> [x] [2] -> OP_EQUAL_SWITCH -> [x] [true] -> execute case 2: code.
+static void SwitchStatement()
+{
+	Consume(TOKEN_LEFT_PAREN, "Expect '(' after switch.");
+	Expression(); // switch on
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after switch.");
+	Consume(TOKEN_LEFT_BRACE, "Expect '{' before switch body.");
+
+	if (!Check(TOKEN_CASE))
+	{
+		Error("Switch statement must contain at least one case.");
+	}
+
+	int nextCaseJump = -1; // used when cnd not met
+	int endJump = -1; // used when cnd met
+	while (Match(TOKEN_CASE))
+	{
+		if (nextCaseJump != -1) 
+		{
+			PatchJump(nextCaseJump); 
+			EmitByte(OP_POP); // false value
+		}
+		Expression();
+		Consume(TOKEN_COLON, "Expect ':' before case body.");
+		EmitByte(OP_EQUAL_SWITCH);
+		nextCaseJump = EmitJump(OP_JUMP_IF_FALSE);
+		EmitByte(OP_POP); // true value
+		Statement();	// require at least 1 statement
+		while (!Check(TOKEN_CASE) && !Check(TOKEN_DEFAULT) && !Check(TOKEN_RIGHT_BRACE))
+		{
+			Statement();
+		}
+		if (endJump != -1) { PatchJump(endJump); }
+		endJump = EmitJump(OP_JUMP);
+	}
+
+	// last case jumps to default or end of switch statement if cnd not met
+	PatchJump(nextCaseJump); 
+	EmitByte(OP_POP);
+
+	if (Match(TOKEN_DEFAULT))
+	{
+		Consume(TOKEN_COLON, "Expect ':' before case body.");
+		Statement();
+		while (!Check(TOKEN_RIGHT_BRACE))
+		{
+			Statement();
+		}
+	}
+
+	Consume(TOKEN_RIGHT_BRACE, "Expect '}' after switch body");
+
+	PatchJump(endJump);
+	EmitByte(OP_POP); // switch on
 }
 
 static void Statement()
@@ -641,6 +695,10 @@ static void Statement()
 	else if (Match(TOKEN_FOR))
 	{
 		ForStatement();
+	}
+	else if (Match(TOKEN_SWITCH))
+	{
+		SwitchStatement();
 	}
 	else
 	{
@@ -692,9 +750,9 @@ static void AddLocal(Token* name)
 	local->depth = -1;
 }
 
-static void DeclareVariable()
+static void DeclareVariable(Token* name)
 {
-	Token* name = &parser.previous;
+	// Token* name = &parser.previous;
 	for (int i = currentCompiler->localsCount - 1; i >= 0; i--)
 	{
 		Local* local = &currentCompiler->locals[i];
@@ -713,7 +771,7 @@ static int ParseVariable(const char* errorMessage)
 	Consume(TOKEN_IDENTIFIER, errorMessage);
 	if (currentCompiler->currentScopeDepth != 0)
 	{
-		DeclareVariable();
+		DeclareVariable(&parser.previous);
 		return 0; // dummy value, don't add local var to constants array
 	}
 	return IdentifierConstant(&parser.previous);
