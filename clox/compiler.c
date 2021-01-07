@@ -758,11 +758,25 @@ static void ContinueStatement()
 
 	Consume(TOKEN_SEMICOLON, "Expect ';' after continue.");
 
-	while (currentCompiler->currentScopeDepth >= currentLoopData->bodyScopeDepth)
+	// Pop everything in loop scope and scopes nested inside loop
+	int popCount = 0;
+	for (int i = currentCompiler->localsCount - 1; i >= 0 && currentCompiler->locals[i].depth >= currentLoopData->bodyScopeDepth; i--)
 	{
-		EndScope(); // Pop local variables in loop body allocated before continue statement
+		popCount++;
 	}
-	BeginScope(); 
+
+	assert(popCount <= UINT8_MAX);
+	if (popCount > 0)
+	{
+		EmitByte(OP_POPN);
+		EmitByte((uint8_t)popCount);
+	}
+	
+	//while (currentCompiler->currentScopeDepth >= currentLoopData->bodyScopeDepth)
+	//{
+	//	EndScope(); // Pop local variables in loop body allocated before continue statement
+	//}
+	//BeginScope(); 
 
 	EmitLoopJump(currentLoopData->startInstructionIndex);
 }
