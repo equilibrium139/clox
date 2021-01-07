@@ -1,6 +1,7 @@
 #include "compiler.h"
 
 #include "common.h"
+#include "memory.h"
 #include "object.h"
 #include "scanner.h"
 
@@ -76,6 +77,15 @@ static Chunk* CurrentChunk()
 {
 	return compilingChunk;
 }
+
+typedef struct
+{
+	int startInstructionIndex;
+	int endInstructionIndex;
+	int bodyScopeDepth;
+} LoopData;
+
+LoopData* currentLoopData;
 
 static void ErrorAt(Token* token, const char* message)
 {
@@ -169,6 +179,7 @@ static void ParsePrecedence(Precedence);
 static void And(bool);
 static void Or(bool);
 static void VarDeclaration();
+static void AddLocal(Token* name);
 
 static void Grouping(bool canAssign)
 {
@@ -507,7 +518,13 @@ static void WhileStatement()
 {
 	Consume(TOKEN_LEFT_PAREN, "Expect '(' before while condition.");
 
-	int loopJumpLocation = CurrentChunk()->count;
+	LoopData* enclosingLoopData = currentLoopData;
+	LoopData innerLoopData;
+	innerLoopData.startInstructionIndex = CurrentChunk()->count;
+	innerLoopData.endInstructionIndex = -1;
+	innerLoopData.bodyScopeDepth = currentCompiler->currentScopeDepth + 1;
+	currentLoopData = &innerLoopData;
+
 	Expression();
 
 	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after while condition.");
@@ -515,10 +532,13 @@ static void WhileStatement()
 	int falseJump = EmitJump(OP_JUMP_IF_FALSE);
 	EmitByte(OP_POP); // true case condition pop
 	Statement();
-	EmitLoopJump(loopJumpLocation);
+	EmitLoopJump(innerLoopData.startInstructionIndex);
 
 	PatchJump(falseJump);
+	innerLoopData.endInstructionIndex = CurrentChunk()->count;
 	EmitByte(OP_POP); // false case condition pop
+
+	currentLoopData = enclosingLoopData;
 }
 
 /*
@@ -542,6 +562,13 @@ static void ForStatement()
 {
 	Consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
 
+	LoopData* enclosingLoopData = currentLoopData;
+	LoopData innerLoopData;
+	innerLoopData.startInstructionIndex = -1;
+	innerLoopData.endInstructionIndex = -1;
+	innerLoopData.bodyScopeDepth = currentCompiler->currentScopeDepth + 1;
+	currentLoopData = &innerLoopData;
+
 	bool hasInitializer = false;
 	if (!Match(TOKEN_SEMICOLON))
 	{
@@ -549,6 +576,7 @@ static void ForStatement()
 		{
 			hasInitializer = true;
 			BeginScope();
+			innerLoopData.bodyScopeDepth++; // body is one scope deeper since var decl is in it's own top level scope
 			VarDeclaration();
 		}
 		else {
@@ -577,6 +605,14 @@ static void ForStatement()
 	int conditionAndIncrJump = EmitJump(OP_JUMP);
 	int loopJumpLocation = CurrentChunk()->count;
 
+	innerLoopData.startInstructionIndex = CurrentChunk()->count;
+
+	if (!Check(TOKEN_RIGHT_PAREN))
+	{
+		Expression(); // increment
+		EmitByte(OP_POP); // pop incr value
+	}
+
 	// Copy condition
 	for (int i = conditionBeginIndex; i < conditionEndIndex; i++)
 	{
@@ -589,12 +625,6 @@ static void ForStatement()
 		EmitByte(OP_POP);
 	}
 
-	if (!Check(TOKEN_RIGHT_PAREN))
-	{
-		Expression(); // increment
-		EmitByte(OP_POP); // pop incr value
-	}
-
 	PatchJump(conditionAndIncrJump);
 
 	Consume(TOKEN_RIGHT_PAREN, "Expect ')' before for loop body.");
@@ -602,6 +632,8 @@ static void ForStatement()
 	// EmitByte(OP_POP); // pop condition true case
 	Statement(); // loop body
 	EmitLoopJump(loopJumpLocation);
+
+	innerLoopData.endInstructionIndex = CurrentChunk()->count;
 	
 	if (preLoopFalseJump > -1)
 	{
@@ -611,6 +643,8 @@ static void ForStatement()
 	}
 
 	if (hasInitializer) { EndScope(); }
+
+	currentLoopData = enclosingLoopData;
 }
 
 // We need value being switched on to stay on the stack. Solution: OP_EQUAL_SWITCH. This is similar to
@@ -618,41 +652,74 @@ static void ForStatement()
 // with the truth value of the operation. Ex:
 // switch(x) case 1 case 2 etc... x = 2
 // Stack: [x] [1] -> OP_EQUAL_SWITCH -> [x] [false] -> OP_POP -> [x] -> [x] [2] -> OP_EQUAL_SWITCH -> [x] [true] -> execute case 2: code.
+
+// TODO change this so that switched on expression is treated as a local variable. I think this will make it 
+// much easier to support continue/break statements later on.
+
 static void SwitchStatement()
 {
+	BeginScope();
+
 	Consume(TOKEN_LEFT_PAREN, "Expect '(' after switch.");
+	
 	Expression(); // switch on
+
+	// Treat value being switched on as a variable so we can push it later on to compare with case values.
+	Token switchedOn;	// dummy token
+	switchedOn.length = -1;
+	switchedOn.start = NULL;
+	switchedOn.line = parser.previous.line;
+	AddLocal(&switchedOn);
+	int switchedOnIndex = currentCompiler->localsCount - 1;
+	// TODO ensure temp vars like this don't impact var lookup/ var definitions for normal vars
+	currentCompiler->locals[switchedOnIndex].depth = currentCompiler->currentScopeDepth;
+
 	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after switch.");
 	Consume(TOKEN_LEFT_BRACE, "Expect '{' before switch body.");
 
 	if (!Check(TOKEN_CASE))
 	{
 		Error("Switch statement must contain at least one case.");
+		return;
 	}
 
+	// Since we don't know where to jump for the end of the switch statement, the end of each case body has a jump
+	// to the end of the next case body (indicated by endJump variable). This could also be done by 
+
+	int endJumpsCap = 8;
+	int* endJumps = NULL;
+	endJumps = GROW_ARRAY(int, endJumps, 0, endJumpsCap);
+	int endJumpsCount = 0;
+
 	int nextCaseJump = -1; // used when cnd not met
-	int endJump = -1; // used when cnd met
 	while (Match(TOKEN_CASE))
 	{
-		if (nextCaseJump != -1) 
+		if (nextCaseJump != -1)
 		{
-			PatchJump(nextCaseJump); 
-			EmitByte(OP_POP); // false value
+			PatchJump(nextCaseJump);
+			EmitByte(OP_POP); // false value from comparison with previous case value.
 		}
 		Expression();
 		Consume(TOKEN_COLON, "Expect ':' before case body.");
-		EmitByte(OP_EQUAL_SWITCH);
+		// Push value being switched on onto stack.
+		WriteIndexOp(CurrentChunk(), switchedOnIndex, switchedOn.line, OP_GET_LOCAL, OP_GET_LOCAL_LONG);
+		EmitByte(OP_EQUAL);
 		nextCaseJump = EmitJump(OP_JUMP_IF_FALSE);
-		EmitByte(OP_POP); // true value
+		EmitByte(OP_POP); // true value if we didn't jump
 		Statement();	// require at least 1 statement
 		while (!Check(TOKEN_CASE) && !Check(TOKEN_DEFAULT) && !Check(TOKEN_RIGHT_BRACE))
 		{
 			Statement();
 		}
-		if (endJump != -1) { PatchJump(endJump); }
-		endJump = EmitJump(OP_JUMP);
-	}
 
+		if (endJumpsCount >= endJumpsCap) {
+			int oldCap = endJumpsCap;
+			endJumpsCap = GROW_CAPACITY(endJumpsCap);
+			endJumps = GROW_ARRAY(int, endJumps, oldCap, endJumpsCap);
+		}
+		endJumps[endJumpsCount] = EmitJump(OP_JUMP);
+		endJumpsCount++;
+	}
 	// last case jumps to default or end of switch statement if cnd not met
 	PatchJump(nextCaseJump); 
 	EmitByte(OP_POP);
@@ -669,8 +736,35 @@ static void SwitchStatement()
 
 	Consume(TOKEN_RIGHT_BRACE, "Expect '}' after switch body");
 
-	PatchJump(endJump);
-	EmitByte(OP_POP); // switch on
+	for (int i = 0; i < endJumpsCount; i++)
+	{
+		PatchJump(endJumps[i]);
+	}
+
+	FREE_ARRAY(int, endJumps, endJumpsCap);
+
+	EndScope();
+
+	// PatchJump(endJump);
+}
+
+static void ContinueStatement()
+{
+	if (currentLoopData->startInstructionIndex == -1)
+	{
+		Error("Can only use continue statement in loops.");
+		return;
+	}
+
+	Consume(TOKEN_SEMICOLON, "Expect ';' after continue.");
+
+	while (currentCompiler->currentScopeDepth >= currentLoopData->bodyScopeDepth)
+	{
+		EndScope(); // Pop local variables in loop body allocated before continue statement
+	}
+	BeginScope(); 
+
+	EmitLoopJump(currentLoopData->startInstructionIndex);
 }
 
 static void Statement()
@@ -700,6 +794,10 @@ static void Statement()
 	{
 		SwitchStatement();
 	}
+	else if (Match(TOKEN_CONTINUE))
+	{
+		ContinueStatement();
+	}
 	else
 	{
 		ExpressionStatement();
@@ -721,6 +819,7 @@ static void Synchronize()
 		case TOKEN_VAR:
 		case TOKEN_FOR:
 		case TOKEN_IF:
+		case TOKEN_SWITCH:
 		case TOKEN_WHILE:
 		case TOKEN_PRINT:
 		case TOKEN_RETURN:
@@ -760,6 +859,7 @@ static void DeclareVariable(Token* name)
 		if (IdentifiersEqual(&local->name, name))
 		{
 			Error("Already variable with this name in this scope.");
+			return;
 		}
 	}
 
@@ -772,7 +872,7 @@ static int ParseVariable(const char* errorMessage)
 	if (currentCompiler->currentScopeDepth != 0)
 	{
 		DeclareVariable(&parser.previous);
-		return 0; // dummy value, don't add local var to constants array
+		return -1; // dummy value, don't add local var to constants array
 	}
 	return IdentifierConstant(&parser.previous);
 }
@@ -826,6 +926,9 @@ bool Compile(const char* source, Chunk* chunk)
 	parser.hadError = parser.panicMode = false;
 	Compiler compiler;
 	InitCompiler(&compiler);
+	LoopData loopData;
+	loopData.startInstructionIndex = loopData.endInstructionIndex = loopData.bodyScopeDepth = -1;
+	currentLoopData = &loopData;
 	Advance();
 	while (!Match(TOKEN_EOF))
 	{

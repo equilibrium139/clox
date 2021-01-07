@@ -1,16 +1,16 @@
-var i = "Bob123";
-switch(i)
-{
-  case 1: print 1;
-  case 2: print 2;
-  case 3: print 3;
-  case "Bob": print "Bob";
-  case 9: print 9;
-  case 10: print 10;
-  default: print "stuff";
-}
+// var i = "Bob123";
+// switch(i)
+// {
+//   case 1: print 1;
+//   case 2: print 2;
+//   case 3: print 3;
+//   case "Bob": print "Bob";
+//   case 9: print 9;
+//   case 10: print 10;
+//   default: print "stuff";
+// }
 
-print i;
+// print i;
 
 for(var i = 0; i < 10; i = i + 1)
 {
@@ -19,7 +19,7 @@ for(var i = 0; i < 10; i = i + 1)
     case 1: print "one";
     case 2: print "two";
     case 3: print "three";
-    case 4: print "four";
+    case 4: continue;
     case 5: print "five";
     case 6: print "six";
     default: print i;

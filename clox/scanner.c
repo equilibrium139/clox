@@ -174,6 +174,7 @@ static TokenType IdentifierOrKeywordType()
 			{
 			case 'a': return CheckKeyword(2, 2, "se", TOKEN_CASE);
 			case 'l': return CheckKeyword(2, 3, "ass", TOKEN_CLASS);
+			case 'o': return CheckKeyword(2, 6, "ntinue", TOKEN_CONTINUE);
 			}
 		}
 		break;
