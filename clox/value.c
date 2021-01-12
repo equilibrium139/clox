@@ -3,6 +3,8 @@
 #include "memory.h"
 #include "object.h"
 
+#include <stdio.h>
+
 void InitValueArray(ValueArray* arr)
 {
 	arr->count = arr->capacity = 0;
@@ -26,21 +28,6 @@ void WriteValueArray(ValueArray* arr, Value value)
 
 	arr->values[arr->count] = value;
 	arr->count++;
-}
-
-void PrintObject(Value value)
-{
-	switch (OBJ_TYPE(value))
-	{
-	case OBJ_STRING: {
-		ObjString* str = AS_STRING(value);
-		if (str->ownsChars) printf("%s", str->chars);
-		else printf("%.*s", str->length, str->chars); 
-		break;
-	}
-	default:
-		break;
-	}
 }
 
 void PrintValue(Value value)

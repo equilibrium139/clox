@@ -142,6 +142,8 @@ int DisassembleInstruction(Chunk* chunk, int offset)
 		return IndexLongInstruction("OP_JUMP_IF_TRUE", chunk, offset);
 	case OP_JUMP_BACK:
 		return IndexLongInstruction("OP_JUMP_BACK", chunk, offset);
+	case OP_CALL:
+		return IndexInstruction("OP_CALL", chunk, offset);
 	case OP_RETURN:
 		return SimpleInstruction("OP_RETURN", offset);
 	default:

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "common.h"
 #include "compiler.h"
@@ -13,17 +14,36 @@
 
 VM vm;
 
+static void DefineNative(const char* name, NativeFn function)
+{
+	// TODO Come back to this after implementing GC, might make some sense why we need to push and pop.
+	// has something to do with ObjString.
+	int nameLength = (int)strlen(name);
+	Push(OBJ_VAL(CopyString(name, nameLength)));
+	Push(OBJ_VAL(NewNative(function)));
+	TableSet(&vm.globals, AS_STRING(vm.stack.values[0]), vm.stack.values[1]);
+	Pop();
+	Pop();
+}
+
+static Value ClockNative(int argCount, Value* args)
+{
+	return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
+}
+
 static void ResetStack()
 {
-	InitValueArray(&vm.stack);
+	vm.stack.count = 0;
+	vm.frameCount = 0;
 }
 
 void InitVM()
 {
-	ResetStack();
+	InitValueArray(&vm.stack);
 	vm.objects = NULL;
 	InitTable(&vm.strings);
 	InitTable(&vm.globals);
+	DefineNative("clock", ClockNative);
 }
 
 void FreeVM()
@@ -65,9 +85,16 @@ static void RuntimeError(const char* format, ...)
 	va_end(args);
 	fputs("\n", stderr);
 
-	size_t instruction_index = vm.ip - vm.chunk->code - 1;
-	int line = GetLine(vm.chunk, instruction_index);
-	fprintf(stderr, "[line %d] in script\n", line);
+	for (int i = vm.frameCount - 1; i >= 0; i--)
+	{
+		CallFrame* frame = &vm.frames[i];
+		ObjFunction* function = frame->function;
+		size_t instruction_index = frame->ip - function->chunk.code - 1;
+		int line = GetLine(&function->chunk, instruction_index);
+		fprintf(stderr, "[line %d] in ", line);
+		if (function->name == NULL) fprintf(stderr, "script.\n");
+		else fprintf(stderr, "%s()\n", function->name->chars);
+	}
 
 	ResetStack();
 }
@@ -125,18 +152,64 @@ static void Concatenate()
 	memcpy(concatChars + a->length, b->chars, b->length);
 	concatChars[length] = '\0';
 
-	ObjString* concatenated = TakeString(concatChars, length, true);
+	ObjString* concatenated = TakeString(concatChars, length);
 	Push(OBJ_VAL(concatenated));
+}
+
+static bool Call(ObjFunction* function, int argCount)
+{
+	if (argCount != function->arity)
+	{
+		RuntimeError("Expected %d arguments but got %d instead.", function->arity, argCount);
+		return false;
+	}
+
+	if (vm.frameCount >= FRAMES_MAX)
+	{
+		RuntimeError("Stack overflow.");
+		return false;
+	}
+
+	CallFrame* frame = &vm.frames[vm.frameCount++];
+	frame->function = function;
+	frame->ip = function->chunk.code;
+	frame->slotsBeginIndex = vm.stack.count - argCount - 1; // -1 to skip over local slot zero which contains func being called
+	return true;
+}
+
+static bool CallValue(Value callee, int argCount)
+{
+	if (IS_OBJ(callee))
+	{
+		switch (OBJ_TYPE(callee))
+		{
+		case OBJ_FUNCTION: return Call(AS_FUNCTION(callee), argCount);
+		case OBJ_NATIVE: {
+			NativeFn native = AS_NATIVE(callee);
+			Value* argsBegin = &vm.stack.values[vm.stack.count - argCount - 1];
+			Value result = native(argCount, argsBegin);
+			Push(result);
+			return true;
+		}
+		default:
+			break;
+		}
+	}
+
+	RuntimeError("Can only call functions and classes.");
+	return false;
 }
 
 static InterpretResult Run()
 {
-#define READ_BYTE() (*vm.ip++)
-#define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])	
+	CallFrame* frame = &vm.frames[vm.frameCount - 1];
+
+#define READ_BYTE() (*frame->ip++)
+#define READ_CONSTANT() (frame->function->chunk.constants.values[READ_BYTE()])	
 // Can't use READ_BYTE() here because C doesn't guarantee left to right order of evaluation i.e. READ_BYTE() corresponding to READ_BYTE() << 16
 // could get called before READ_BYTE() corresponding to READ_BYTE() << 8. Not good.
-#define READ_LONG_INDEX() (vm.ip += 3, vm.ip[-3] | (vm.ip[-2] << 8) | (vm.ip[-1] << 16)) 
-#define READ_CONSTANT_LONG() (vm.chunk->constants.values[READ_LONG_INDEX()])
+#define READ_LONG_INDEX() (frame->ip += 3, frame->ip[-3] | (frame->ip[-2] << 8) | (frame->ip[-1] << 16)) 
+#define READ_CONSTANT_LONG() (frame->function->chunk.constants.values[READ_LONG_INDEX()])
 #define PEEK_TOP() (vm.stack.values[vm.stack.count - 1])
 #define BINARY_OP(convertFunc, resultType, op) \
 	do { \
@@ -152,7 +225,7 @@ static InterpretResult Run()
 
 #define BINARY_OP_CMP(op) BINARY_OP(AS_BOOL, VAL_BOOL, op)
 #define BINARY_OP_MATH(op) BINARY_OP(AS_NUMBER, VAL_NUMBER, op)
-#define READ_STRING(index) AS_STRING(vm.chunk->constants.values[index])
+#define READ_STRING(index) AS_STRING(frame->function->chunk.constants.values[index])
 
 	while (true)
 	{
@@ -165,7 +238,7 @@ static InterpretResult Run()
 			printf(" ]");
 		}
 		printf("\n");
-		DisassembleInstruction(vm.chunk, (int)(vm.ip - vm.chunk->code));
+		DisassembleInstruction(&frame->function->chunk, (int)(frame->ip - frame->function->chunk.code));
 #endif
 		uint8_t instruction;
 		switch (instruction = READ_BYTE())
@@ -182,17 +255,14 @@ static InterpretResult Run()
 		}
 		case OP_NIL: {
 			Push(NIL_VAL);
-			printf("NIL\n");
 			break;
 		}
 		case OP_TRUE: {
 			Push(BOOL_VAL(true));
-			printf("true\n");
 			break;
 		}
 		case OP_FALSE: {
 			Push(BOOL_VAL(false));
-			printf("false\n");
 			break;
 		}
 		case OP_NOT: {
@@ -344,18 +414,19 @@ static InterpretResult Run()
 		}
 		case OP_GET_LOCAL:
 		{
-			Push(vm.stack.values[READ_BYTE()]);
+			// Push(frame->slots[READ_BYTE()]);
+			Push(vm.stack.values[frame->slotsBeginIndex + READ_BYTE()]);
 			break;
 		}
 		case OP_GET_LOCAL_LONG:
 		{
-			Push(vm.stack.values[READ_LONG_INDEX()]);
+			// Push(frame->slots[READ_LONG_INDEX()]);
+			Push(vm.stack.values[frame->slotsBeginIndex + READ_LONG_INDEX()]);
 			break;
 		}
 		case OP_SET_LOCAL:
 		{
-			Value* local = &vm.stack.values[READ_BYTE()];
-			*local = PEEK_TOP();
+			vm.stack.values[frame->slotsBeginIndex + READ_BYTE()] = PEEK_TOP();
 			break;
 		}
 		case OP_SET_LOCAL_LONG:
@@ -367,7 +438,7 @@ static InterpretResult Run()
 		case OP_JUMP:
 		{
 			int offset = READ_LONG_INDEX();
-			vm.ip += offset;
+			frame->ip += offset;
 			break;
 		}
 		case OP_JUMP_IF_FALSE:
@@ -375,7 +446,7 @@ static InterpretResult Run()
 			int offset = READ_LONG_INDEX();
 			if (IsFalsey(PEEK_TOP()))
 			{
-				vm.ip += offset;
+				frame->ip += offset;
 			}
 			break;
 		}
@@ -384,21 +455,41 @@ static InterpretResult Run()
 			int offset = READ_LONG_INDEX();
 			if (!IsFalsey(PEEK_TOP()))
 			{
-				vm.ip += offset;
+				frame->ip += offset;
 			}
 			break;
 		}
 		case OP_JUMP_BACK:
 		{
 			int offset = READ_LONG_INDEX();
-			vm.ip -= offset;
+			frame->ip -= offset;
+			break;
+		}
+		case OP_CALL:
+		{
+			int argCount = READ_BYTE();
+			if (!CallValue(Peek(argCount), argCount))
+			{
+				return INTERPRET_RUNTIME_ERROR;
+			}
+			frame = &vm.frames[vm.frameCount - 1];
 			break;
 		}
 		case OP_RETURN:
 		{
-			/*PrintValue(Pop());
-			printf("\n");*/
-			return INTERPRET_OK;
+			Value result = Pop();
+			vm.frameCount--;
+			if (vm.frameCount == 0) { // "returned" from the script
+				Pop();
+				return INTERPRET_OK;
+			}
+			
+			// int localsToPop = &vm.stack.values[vm.stack.count - 1] - frame->slots + 1; 
+			vm.stack.count = frame->slotsBeginIndex;
+			Push(result);
+
+			frame = &vm.frames[vm.frameCount - 1];
+			break;
 		}
 		default:
 			break;
@@ -417,22 +508,19 @@ static InterpretResult Run()
 }
 
 InterpretResult Interpret(const char* source)
-{
-	Chunk chunk;
-	InitChunk(&chunk);
+{	
+	ObjFunction* function = Compile(source);
+	if (function == NULL) return INTERPRET_COMPILE_ERROR;
 
-	if (!Compile(source, &chunk))
-	{
-		FreeChunk(&chunk);
-		return INTERPRET_COMPILE_ERROR;
-	}
+	/*CallFrame* frame = &vm.frames[vm.frameCount++];
+	frame->function = function;
+	frame->ip = function->chunk.code;
+	frame->slots = vm.stack.values;*/
 
-	vm.chunk = &chunk;
-	vm.ip = chunk.code;
+	Push(OBJ_VAL(function));
+	Call(function, 0); // "call" script
 
-	InterpretResult result = Run();
-	FreeChunk(&chunk);
-	return result;
+	return Run();
 }
 
 //InterpretResult Interpret(Chunk* chunk)

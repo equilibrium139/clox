@@ -48,8 +48,6 @@ typedef struct
 
 Parser parser;
 
-Chunk* compilingChunk;
-
 typedef struct
 {
 	Token name;
@@ -58,8 +56,18 @@ typedef struct
 
 #define MAX_LOCALS 500 // random number over 255 so I have an excuse to add _LONG_ op codes for local variable ops 
 
-typedef struct
+typedef enum
 {
+	TYPE_FUNCTION,
+	TYPE_SCRIPT,
+} FunctionType;
+
+typedef struct Compiler
+{
+	struct Compiler* enclosing;
+	ObjFunction* function;
+	FunctionType type;
+
 	Local locals[MAX_LOCALS]; // Too lazy to make a dynamic array of Locals
 	int localsCount;
 	int currentScopeDepth;
@@ -67,15 +75,31 @@ typedef struct
 
 Compiler* currentCompiler;
 
-static void InitCompiler(Compiler* compiler)
+static void InitCompiler(Compiler* compiler, FunctionType type)
 {
+	compiler->enclosing = currentCompiler;
+	compiler->function = NULL;
+	compiler->type = type;
 	compiler->localsCount = compiler->currentScopeDepth = 0;
+	compiler->function = NewFunction();
 	currentCompiler = compiler;
+
+	if (type != TYPE_SCRIPT)
+	{
+		currentCompiler->function->name = CopyString(parser.previous.start, parser.previous.length);
+	}
+
+	// Compiler reserves stack slot 0 for itself. This slot is used to store the function
+	// being called.
+	Local* local = &currentCompiler->locals[currentCompiler->localsCount++];
+	local->depth = 0;
+	local->name.start = "";
+	local->name.length = 0;
 }
 
 static Chunk* CurrentChunk()
 {
-	return compilingChunk;
+	return &currentCompiler->function->chunk;
 }
 
 typedef struct
@@ -266,6 +290,11 @@ static int ResolveLocal(Token* name)
 	return -1;
 }
 
+static int IdentifierConstant(Token* identifier)
+{
+	return AddConstant(CurrentChunk(), OBJ_VAL(CopyString(identifier->start, identifier->length)));
+}
+
 static void NamedVariable(Token name, bool canAssign)
 {
 	OpCode getOp, getOpLong, setOp, setOpLong;
@@ -298,8 +327,37 @@ static void Variable(bool canAssign)
 	NamedVariable(parser.previous, canAssign);
 }
 
+static int ArgumentList()
+{
+	int argsCount = 0;
+
+	if (!Check(TOKEN_RIGHT_PAREN))
+	{
+		do
+		{
+			argsCount++;
+			if (argsCount >= 255)
+			{
+				ErrorAtCurrent("Too many arguments.");
+			}
+			Expression();
+		} while (Match(TOKEN_COMMA));
+	}
+	
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+
+	return argsCount;
+}
+
+static void Call(bool canAssign)
+{
+	int argsCount = ArgumentList();
+	EmitByte(OP_CALL);
+	EmitByte((uint8_t)argsCount);
+}
+
 ParseRule rules[] = {
-	[TOKEN_LEFT_PAREN] = {Grouping, NULL, PREC_NONE},
+	[TOKEN_LEFT_PAREN] = {Grouping, Call, PREC_CALL}, // Left paren treated as infix operator for call: lhs- funcName ( rhs: args )
 	[TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
 	[TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
 	[TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
@@ -374,19 +432,25 @@ static void ParsePrecedence(Precedence precedence)
 	}
 }
 
-static void EndCompiler()
+static ObjFunction* EndCompiler()
 {
+	// return NIL if there is no return value.
+	EmitByte(OP_NIL);
 	EmitByte(OP_RETURN);
+	ObjFunction* function = currentCompiler->function;
 #ifdef DEBUG_PRINT_CODE
 	if (!parser.hadError)
 	{
-		DisassembleChunk(CurrentChunk(), "code");
+		DisassembleChunk(CurrentChunk(), function->name != NULL ? function->name->chars : "<script>");
 	}
 #endif
+	currentCompiler = currentCompiler->enclosing;
+	return function;
 }
 
 static void Expression()
 {
+	register int i = 0;
 	ParsePrecedence(PREC_ASSIGNMENT);
 }
 
@@ -781,6 +845,26 @@ static void ContinueStatement()
 	EmitLoopJump(currentLoopData->startInstructionIndex);
 }
 
+static void ReturnStatement()
+{
+	if (currentCompiler->type == TYPE_SCRIPT)
+	{
+		Error("Can't return from top level code.");
+	}
+
+	if (Match(TOKEN_SEMICOLON))
+	{
+		EmitByte(OP_NIL);
+		EmitByte(OP_RETURN);
+	}
+	else
+	{
+		Expression();
+		EmitByte(OP_RETURN);
+		Consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
+	}
+}
+
 static void Statement()
 {
 	if (Match(TOKEN_PRINT)) {
@@ -811,6 +895,10 @@ static void Statement()
 	else if (Match(TOKEN_CONTINUE))
 	{
 		ContinueStatement();
+	}
+	else if (Match(TOKEN_RETURN))
+	{
+		ReturnStatement();
 	}
 	else
 	{
@@ -844,11 +932,6 @@ static void Synchronize()
 
 		Advance();
 	}
-}
-
-static int IdentifierConstant(Token* identifier)
-{
-	return AddConstant(CurrentChunk(), OBJ_VAL(CopyString(identifier->start, identifier->length)));
 }
 
 static void AddLocal(Token* name)
@@ -891,11 +974,16 @@ static int ParseVariable(const char* errorMessage)
 	return IdentifierConstant(&parser.previous);
 }
 
+static void MarkInitialized()
+{
+	currentCompiler->locals[currentCompiler->localsCount - 1].depth = currentCompiler->currentScopeDepth;
+}
+
 static void DefineVariable(int global, int line)
 {
 	if (currentCompiler->currentScopeDepth != 0)
 	{
-		currentCompiler->locals[currentCompiler->localsCount - 1].depth = currentCompiler->currentScopeDepth;
+		MarkInitialized();
 	}
 	else WriteGlobalDeclaration(CurrentChunk(), global, line);
 }
@@ -919,11 +1007,52 @@ static void VarDeclaration()
 	DefineVariable(global, line);
 }
 
+static void Function(FunctionType type)
+{
+	Compiler compiler;
+	InitCompiler(&compiler, type);
+	BeginScope();
+
+	Consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+	if (!Check(TOKEN_RIGHT_PAREN))
+	{
+		do {
+			currentCompiler->function->arity++;
+			if (currentCompiler->function->arity > 255) {
+				ErrorAtCurrent("Can't have more than 255 parameters.");
+			}
+			uint8_t paramConstant = ParseVariable("Expect parameter name.");
+			DefineVariable(paramConstant, parser.previous.line);
+		} while (Match(TOKEN_COMMA));
+	}
+	Consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+
+	Consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
+	Block();
+
+	ObjFunction* function = EndCompiler();
+	WriteConstant(CurrentChunk(), OBJ_VAL(function), parser.previous.line);
+}
+
+static void FuncDeclaration()
+{
+	int global = ParseVariable("Expect function name.");
+	int line = parser.previous.line;
+	// Mark local function as initialized to allow for the function to refer to itself (recursion).
+	if (currentCompiler->currentScopeDepth > 0) MarkInitialized();
+	Function(TYPE_FUNCTION);
+	DefineVariable(global, line);
+}
+
 static void Declaration()
 {
 	if (Match(TOKEN_VAR))
 	{
 		VarDeclaration();
+	}
+	else if (Match(TOKEN_FUN))
+	{
+		FuncDeclaration();
 	}
 	else
 	{
@@ -933,13 +1062,12 @@ static void Declaration()
 	if (parser.panicMode) { Synchronize(); }
 }
 
-bool Compile(const char* source, Chunk* chunk)
+ObjFunction* Compile(const char* source)
 {
 	InitScanner(source);
-	compilingChunk = chunk;
 	parser.hadError = parser.panicMode = false;
 	Compiler compiler;
-	InitCompiler(&compiler);
+	InitCompiler(&compiler, TYPE_SCRIPT);
 	LoopData loopData;
 	loopData.startInstructionIndex = loopData.endInstructionIndex = loopData.bodyScopeDepth = -1;
 	currentLoopData = &loopData;
@@ -948,6 +1076,6 @@ bool Compile(const char* source, Chunk* chunk)
 	{
 		Declaration();
 	}
-	EndCompiler();
-	return !parser.hadError;
+	ObjFunction* function = EndCompiler();
+	return !parser.hadError ? function : NULL;
 }

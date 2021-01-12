@@ -1,19 +1,8 @@
-// var i = "Bob123";
-// switch(i)
-// {
-//   case 1: print 1;
-//   case 2: print 2;
-//   case 3: print 3;
-//   case "Bob": print "Bob";
-//   case 9: print 9;
-//   case 10: print 10;
-//   default: print "stuff";
-// }
-
-// print i;
-
-for(var i = 0; i < 10; i = i + 1)
-{
-  if(i == 5) continue;
-  print i;
+fun fib(n) {
+  if (n < 2) return n;
+  return fib(n - 2) + fib(n - 1);
 }
+
+var start = clock();
+print fib(35);
+print clock() - start;
